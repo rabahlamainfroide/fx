@@ -15,16 +15,14 @@ import argparse
 import sys
 import functools
 
-wind_size = 20
-f_wind_size = 10
+
 buffer_size = 6
 num_epochs = 1
 
-def parse_tfexample_fn(example_proto, mode):
+def parse_tfexample_fn(example_proto, mode, p_wind_size ):
     """Parse a single record which is expected to be a tensorflow.Example."""
     feature_to_type = {
-        'p_wind' : tf.FixedLenFeature([wind_size*4], dtype=tf.float32),
-        'f_wind' : tf.FixedLenFeature([f_wind_size*4], dtype=tf.float32),
+        'p_wind' : tf.FixedLenFeature([p_wind_size * 4], dtype=tf.float32),
         'hour' :tf.FixedLenFeature([1], dtype=tf.int64),
         'day_week' : tf.FixedLenFeature([1], dtype=tf.int64),
         'day_month' : tf.FixedLenFeature([1], dtype=tf.int64)}
@@ -41,10 +39,7 @@ def parse_tfexample_fn(example_proto, mode):
     return parsed_features, labels
 
 
-
-
-
-def get_input_fn(mode, tfrecord_pattern, batch_size):
+def get_input_fn(mode, tfrecord_pattern, batch_size, p_wind_size):
   def input_fn():
           dataset = tf.data.TFRecordDataset.list_files(tfrecord_pattern)
           if mode == tf.estimator.ModeKeys.TRAIN:
@@ -56,7 +51,7 @@ def get_input_fn(mode, tfrecord_pattern, batch_size):
               cycle_length=10,
               block_length=1)
           dataset = dataset.map(
-              functools.partial(parse_tfexample_fn, mode=mode),
+              functools.partial(parse_tfexample_fn, mode=mode, p_wind_size=p_wind_size),
               num_parallel_calls=1)
           dataset = dataset.prefetch(1)
           if mode == tf.estimator.ModeKeys.TRAIN:

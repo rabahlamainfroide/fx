@@ -13,11 +13,10 @@ import argparse
 import sys
 import functools
 
-wind_size = 20
-f_wind_size = 10
 
-def _add_conv_layers(inputs, is_training, params):
-    inputs = tf.reshape(inputs, [-1,wind_size,4])
+
+def _add_conv_layers(inputs, is_training,params):
+    inputs = tf.reshape(inputs, [-1,params.p_wind_size,4])
     convolved = inputs
     for i in range(len(params.num_conv)):
       convolved_input = convolved
@@ -79,18 +78,16 @@ def _add_rnn_layers(inputs, is_training, params):
     else:
       outputs = _add_cudnn_rnn_layers(inputs, is_training, params)
     return outputs
-def _add_fc_layers(inputs, num_classes):
-    inputs = tf.reshape(inputs, [-1, wind_size * 128*2])
+def _add_fc_layers(inputs, params):
+    inputs = tf.reshape(inputs, [-1, params.p_wind_size * params.num_nodes * 2])
 
-    inputs = tf.layers.dense(inputs, num_classes)
+    inputs = tf.layers.dense(inputs, params.num_classes)
     return inputs
 
 
 
-def model(inputs, num_classes, is_training, params):
+def model(inputs, is_training, params):
       inputs = _add_conv_layers(inputs, is_training, params)
-
-
       inputs = _add_rnn_layers(inputs, is_training, params)
-      inputs = _add_fc_layers(inputs, num_classes)
+      inputs = _add_fc_layers(inputs,params )
       return inputs

@@ -15,19 +15,18 @@ import argparse
 import sys
 import functools
 
-import model
+from model import model
 import input
-
-
-tfrecord_patten=r"C:\Users\Chak\Desktop\python_project\forex_project\tfrecord\tfrecord*"
+from create_tfrecord import convert_csv
+import glob
+from os.path import normpath
 
 
 def model_fn(features, labels, mode, params):
 
 
 
-
-  logits = model.model(features, 3, mode == tf.estimator.ModeKeys.TRAIN, params )
+  logits = model(features, mode == tf.estimator.ModeKeys.TRAIN, params)
   if mode == tf.estimator.ModeKeys.PREDICT:
     return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
   labels= tf.reshape(labels,[-1])
@@ -56,6 +55,7 @@ def create_estimator_and_specs(run_config):
   """Creates an Experiment configuration based on the estimator and input fn."""
   model_params = tf.contrib.training.HParams(
       num_layers=FLAGS.num_layers,
+      p_wind_size= FLAGS.pwind,
       num_nodes=FLAGS.num_nodes,
       batch_size=FLAGS.batch_size,
       num_conv=FLAGS.num_conv,
@@ -74,32 +74,89 @@ def create_estimator_and_specs(run_config):
 
   train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(
       mode=tf.estimator.ModeKeys.TRAIN,
-      tfrecord_pattern=tfrecord_patten,
-      batch_size=FLAGS.batch_size), max_steps=FLAGS.steps)
+      tfrecord_pattern="tfrecord/*",
+      batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind), max_steps=FLAGS.steps)
 
   eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn(
       mode=tf.estimator.ModeKeys.EVAL,
-      tfrecord_pattern=tfrecord_patten,
-      batch_size=FLAGS.batch_size))
+      tfrecord_pattern="tfrecord/*",
+      batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind))
 
   return estimator, train_spec, eval_spec
 
 
 
 def main(unused_argv):
+  def tfrecord_exist():
+    output_name = FLAGS.pair +'_'+ FLAGS.frame +'_'+ str(FLAGS.pwind) +'_'+ str(FLAGS.fwind) +'_'+ str(FLAGS.loss) +'_'+ str(FLAGS.profit)
+    output_path = os.path.join(FLAGS.output_path, output_name)
+    istfrecord_exist = glob.glob(output_path + '*')
+    return output_path, istfrecord_exist
+
+  csv_name = FLAGS.pair +'_'+ FLAGS.frame
+  csv_patern = os.path.join(FLAGS.csv_dir, csv_name)
+  output_path, istfrecord_exist= tfrecord_exist()
 
 
-  estimator, train_spec, eval_spec = create_estimator_and_specs(
-      run_config=tf.estimator.RunConfig(
-          model_dir=FLAGS.model_dir,
-          save_checkpoints_secs=300,
-          save_summary_steps=100))
-  tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+
+  if (istfrecord_exist):
+    print('print running estimator on tfrecord with patern :', output_path, '*' )
+    estimator, train_spec, eval_spec = create_estimator_and_specs(
+        run_config=tf.estimator.RunConfig(
+            model_dir=FLAGS.model_dir,
+            save_checkpoints_secs=300,
+            save_summary_steps=100))
+
+    tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+  else :
+    print(' no tfrecord  file fit the pattern :   ', output_path, '*')
+
+    '''
+    convert_csv(csv_patern, output_path, FLAGS.output_shards, FLAGS.pwind, FLAGS.fwind, FLAGS.profit, FLAGS.loss)
+    estimator, train_spec, eval_spec = create_estimator_and_specs(
+        run_config=tf.estimator.RunConfig(
+            model_dir=FLAGS.model_dir,
+            save_checkpoints_secs=300,
+            save_summary_steps=100))
+
+    tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+
+    '''
 
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.register("type", "bool", lambda v: v.lower() == "true")
+  parser.add_argument(
+      "--pair",
+      type=str,
+      default="EURUSD",
+      help="Pair")
+  parser.add_argument(
+      "--frame",
+      type=str,
+      default="M1",
+      help="Frame")
+  parser.add_argument(
+      "--pwind",
+      type=int,
+      default="20",
+      help="PWIND Value")
+  parser.add_argument(
+      "--fwind",
+      type=int,
+      default=10,
+      help="FWIND Value")
+  parser.add_argument(
+      "--loss",
+      type=int,
+      default=5,
+      help="Loss in PIP")
+  parser.add_argument(
+      "--profit",
+      type=int,
+      default=5,
+      help="Profit in PIP")
   parser.add_argument(
       "--tfrecord_data",
       type=str,
@@ -176,6 +233,21 @@ if __name__ == "__main__":
       type="bool",
       default="False",
       help="Whether to enable batch normalization or not.")
+  parser.add_argument(
+      "--output_shards",
+      type=int,
+      default=10,
+      help="Number of shards for the output.")
+  parser.add_argument(
+      "--output_path",
+      type=str,
+      default= "tfrecord",
+      help="Directory where to store the output TFRecord files.")
+  parser.add_argument(
+      "--csv_dir",
+      type=str,
+      default="csv_dir",
+      help="Directory where the ndjson files are stored.")
 
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
