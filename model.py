@@ -16,20 +16,11 @@ import functools
 
 
 def _add_conv_layers(inputs, is_training,params):
-    inputs = tf.reshape(inputs, [-1,params.p_wind_size,4])
-    convolved = inputs
     for i in range(len(params.num_conv)):
-      convolved_input = convolved
+      convolved_input = inputs
       if params.batch_norm:
-        convolved_input = tf.layers.batch_normalization(
-            convolved_input,
-            training=is_training)
-      # Add dropout layer if enabled and not first convolution layer.
-      if i > 0 and params.dropout:
-        convolved_input = tf.layers.dropout(
-            convolved_input,
-            rate=params.dropout,
-            training=is_training)
+        convolved_input = tf.layers.batch_normalization(convolved_input,training=is_training)
+
       convolved = tf.layers.conv1d(
           convolved_input,
           filters=params.num_conv[i],
@@ -38,6 +29,7 @@ def _add_conv_layers(inputs, is_training,params):
           strides=1,
           padding="same",
           name="conv1d_%d" % i)
+      convolved = tf.layers.average_pooling1d( inputs=convolved, pool_size=2, strides=1, padding='VALID')
     return convolved
 
 def _add_regular_rnn_layers(inputs, params):
@@ -47,30 +39,13 @@ def _add_regular_rnn_layers(inputs, params):
     elif params.cell_type == "block_lstm":
       cell = tf.contrib.rnn.LSTMBlockCell
     cells_fw = [cell(params.num_nodes) for _ in range(params.num_layers)]
-    cells_bw = [cell(params.num_nodes) for _ in range(params.num_layers)]
-    if params.dropout > 0.0:
-      cells_fw = [tf.contrib.rnn.DropoutWrapper(cell) for cell in cells_fw]
-      cells_bw = [tf.contrib.rnn.DropoutWrapper(cell) for cell in cells_bw]
-    outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(
-        cells_fw=cells_fw,
-        cells_bw=cells_bw,
-        inputs=inputs,
-        dtype=tf.float32,
-        scope="rnn_classification")
-    return outputs
-def _add_cudnn_rnn_layers(inputs, is_training, params):
-    """Adds CUDNN LSTM layers."""
-    # Convolutions output [B, L, Ch], while CudnnLSTM is time-major.
-    convolved = tf.transpose(inputs, [1, 0, 2])
-    lstm = tf.contrib.cudnn_rnn.CudnnLSTM(
-        num_layers=params.num_layers,
-        num_units=params.num_nodes,
-        dropout=params.dropout if is_training else 0.0,
-        direction="bidirectional")
-    outputs, _ = lstm(convolved)
-    # Convert back from time-major outputs to batch-major outputs.
-    outputs = tf.transpose(outputs, [1, 0, 2])
-    return outputs
+    #if params.dropout > 0.0:
+    #  cells_fw = [tf.contrib.rnn.DropoutWrapper(cell) for cell in cells_fw]
+    stacked_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(cells_fw)
+    _, state = tf.nn.dynamic_rnn(stacked_rnn_cell, inputs,scope="rnn_classification", dtype=tf.float32)
+    return state[params.num_layers-1].h
+
+
 def _add_rnn_layers(inputs, is_training, params):
     """Adds recurrent neural network layers depending on the cell type."""
     if params.cell_type != "cudnn_lstm":
@@ -79,15 +54,15 @@ def _add_rnn_layers(inputs, is_training, params):
       outputs = _add_cudnn_rnn_layers(inputs, is_training, params)
     return outputs
 def _add_fc_layers(inputs, params):
-    inputs = tf.reshape(inputs, [-1, params.p_wind_size * params.num_nodes * 2])
-
+    inputs = tf.reshape(inputs, [-1, params.num_nodes ])
+    inputs = tf.layers.dense(inputs, 1024, activation=tf.nn.relu)
     inputs = tf.layers.dense(inputs, params.num_classes)
     return inputs
 
 
 
 def model(inputs, is_training, params):
-      inputs = _add_conv_layers(inputs, is_training, params)
+      #inputs = _add_conv_layers(inputs, is_training, params)
       inputs = _add_rnn_layers(inputs, is_training, params)
       inputs = _add_fc_layers(inputs,params )
       return inputs

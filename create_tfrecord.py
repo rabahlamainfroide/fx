@@ -23,15 +23,14 @@ def convert_csv(csv_patern , output_path, output_shards,p_wind_size, f_wind_size
     file_handles = glob.glob(csv_patern + '*.csv')
     writers = []
     for i in range(output_shards):
-
       writers.append(
-         tf.python_io.TFRecordWriter("%s-%05i-of-%05i" % (output_path, i,  output_shards)))
+         tf.python_io.TFRecordWriter((output_path +'_' + str(i) )))
     for i in range(len(file_handles)) :
         df = pd.read_csv(file_handles[i], parse_dates=[[1,2]], infer_datetime_format= True , delimiter = ',')
         df =df.loc[df['<DTYYYYMMDD>_<TIME>'].apply(minutes) % frame==0]
 
         tm = time_series(df,p_wind_size,f_wind_size)
-        tfrecord_generator(df,tm, writers, output_shards,f_wind_size, profit, loss, frame, tolerance)
+        tfrecord_generator(df,tm, writers, output_shards,f_wind_size, profit, loss, frame, tolerance, output_path)
         print(file_handles[i], " processed")
     for w in writers:
         w.close()
@@ -60,12 +59,13 @@ class time_series (object):
                         return False
                 else:
                     return True
-        #if not check_window():
-        #    return None,None, None, None, None, None
-
+        if not check_window():
+            return None,None, None, None, None, None
 
         p_wind= np.array(self.df.iloc[self.offset:self.offset + self.p_wind_size,2:6])
         f_wind=np.array(self.df.iloc[self.offset + self.p_wind_size-1:self.offset +self.p_wind_size+ self.f_wind_size-1,2:6])
+        p_wind = ((p_wind - p_wind[0,3]) * 10000).astype(int)
+        f_wind = ((f_wind - f_wind[0,3]) * 10000).astype(int)
         time_date = self.df.iloc[self.offset + self.p_wind_size,0]
         vol = self.df.iloc[self.offset + self.p_wind_size,6]
         self.offset=self.offset+1
@@ -77,8 +77,8 @@ class time_series (object):
 class label_generator(object):
     def __init__(self,profit, loss):
         self.sell_counter = 0
-        self.loss= loss/10000
-        self.profit=profit/10000
+        self.loss= loss
+        self.profit=profit
         self.buy_counter = 0
         self.neutral_counter = 0
 
@@ -108,7 +108,9 @@ def print_recurssevely(str):
         print('\r', end='')
         time.sleep(0.2)
 
-def tfrecord_generator(df,tm,writers,output_shards,f_wind_size, profit, loss, frame, tolerance):
+def tfrecord_generator(df,tm,writers,output_shards,f_wind_size, profit, loss, frame, tolerance, output_path ):
+
+
     a = label_generator(profit, loss)
     max_data=df.shape[0]-tm.p_wind_size-tm.f_wind_size
     for i in range(max_data):
@@ -120,23 +122,25 @@ def tfrecord_generator(df,tm,writers,output_shards,f_wind_size, profit, loss, fr
             if (df.shape[0] - tm.offset - tm.p_wind_size - tm.f_wind_size) <=0 :
                 print("end of file reached.  offset =", tm.offset,"window_discarded = ", tm.window_discarded, )
                 print("buy = ", a.buy_counter, "sell =  ", a.sell_counter, "neutral =  ", a.neutral_counter)
+                with open("tfrecord/" + 'log.csv', 'a') as log_file:
+                    log_file.write(str(a.buy_counter)+','+str(a.sell_counter)+','+str(a.neutral_counter)+',')
+
+
                 return 0
         label=a.get_label(f_wind, f_wind_size)
-        p_wind = np.fliplr(p_wind)
 
         features = {}
         features["p_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=p_wind.flatten()))
-        features["label"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[label]))
+        features["f_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=f_wind.flatten()))
         features["day_week"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[day_week]))
         features["day_month"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[day_month]))
         features["hour"]= tf.train.Feature(int64_list=tf.train.Int64List(value=[hour]))
+        features["label"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[label]))
         f = tf.train.Features(feature=features)
         example = tf.train.Example(features=f)
+        writers[label].write(example.SerializeToString())
 
-        writers[_pick_output_shard(output_shards)].write(example.SerializeToString())
 
-    print('offset =', tm.offset,"window_discarded = ", tm.window_discarded )
-    print("buy = ", a.buy_counter, "sell =  ", a.sell_counter, "neutral =  ", a.neutral_counter)
 
 def main(argv):
 
@@ -148,6 +152,8 @@ def main(argv):
 
 
     convert_csv(csv_patern, output_path, FLAGS.output_shards, FLAGS.pwind, FLAGS.fwind, FLAGS.profit, FLAGS.loss, FLAGS.frame, FLAGS.tolerance)
+
+
 
 
 if __name__ == "__main__":
@@ -165,7 +171,7 @@ if __name__ == "__main__":
    parser.add_argument(
        "--tolerance",
        type=int,
-       default=1,
+       default=3,
        help="Tolerance")
    parser.add_argument(
        "--pwind",
@@ -211,7 +217,7 @@ if __name__ == "__main__":
    parser.add_argument(
       "--output_shards",
       type=int,
-      default=10,
+      default=3,
       help="Number of shards for the output.")
 
    FLAGS, unparsed = parser.parse_known_args()
