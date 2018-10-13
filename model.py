@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
@@ -13,37 +13,57 @@ import argparse
 import sys
 import functools
 
-def _add_conv_layers(inputs, is_training):
-    inputs = tf.layers.conv2d(inputs, filters= 256 , kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv1')
-    inputs = tf.layers.batch_normalization(inputs,training=is_training)
-    inputs = tf.layers.conv2d(inputs, filters= 512, kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv2')
-    inputs = tf.layers.batch_normalization(inputs,training=is_training)
-    inputs = tf.layers.average_pooling2d( inputs=inputs, pool_size=2, strides=2, padding='same')
-    inputs = tf.layers.conv2d(inputs, filters= 1024 , kernel_size=[4, 4], strides=1, padding="same", activation=tf.tanh, name= 'conv3')
-    inputs = tf.layers.conv2d(inputs, filters= 1024 , kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv4')
-    inputs = tf.layers.conv2d(inputs, filters= 1024 , kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv5')
-    inputs = tf.layers.average_pooling2d(inputs=inputs, pool_size=2, strides=2, padding='same')
-    inputs = tf.layers.batch_normalization(inputs,training=is_training)
-    return inputs
+def _add_conv_layers(inputs,params, mode):
+ convolved = tf.reshape(inputs, [-1, 36, 1])
+ for i in range(len(params.num_conv)):
+   convolved_input = convolved
+   if params.batch_norm:
+     convolved_input = tf.layers.batch_normalization(
+         convolved_input,
+         training=(mode == tf.estimator.ModeKeys.TRAIN))
+   # Add dropout layer if enabled and not first convolution layer.
+   if i > 0 and params.dropout:
+     convolved_input = tf.layers.dropout(
+         convolved_input,
+         rate=params.dropout,
+         training=(mode == tf.estimator.ModeKeys.TRAIN))
+   convolved = tf.layers.conv1d(
+       convolved_input,
+       filters=params.num_conv[i],
+       kernel_size=params.conv_len[i],
+       activation=tf.nn.relu,
+       strides=1,
+       padding="same",
+       name="conv1d_%d" % i)
+   return convolved
 
-def _add_regular_rnn_layers(inputs, params, num_nodes=2000,  num_layers=5 ):
-    inputs = tf.reshape(inputs, [-1,  params.p_wind_size,1])
+def _add_regular_rnn_layers(convolved, params):
+  """Adds RNN layers."""
+  if params.cell_type == "lstm":
     cell = tf.nn.rnn_cell.BasicLSTMCell
-    cells_fw = [cell(num_nodes) for _ in range(num_layers)]
-    stacked_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(cells_fw)
-    outputs, _ = tf.nn.dynamic_rnn(stacked_rnn_cell, inputs, initial_state=None, scope="rnn_classification", dtype=tf.float32)
-    output = tf.layers.dense(outputs[:, -1, :],  params.num_classes)
-    return output
+  cells_fw = [cell(params.num_nodes) for _ in range(params.num_layers)]
+  cells_bw = [cell(params.num_nodes) for _ in range(params.num_layers)]
+  if params.dropout > 0.0:
+    cells_fw = [tf.contrib.rnn.DropoutWrapper(cell) for cell in cells_fw]
+    cells_bw = [tf.contrib.rnn.DropoutWrapper(cell) for cell in cells_bw]
+  outputs, _, _ = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(
+      cells_fw=cells_fw,
+      cells_bw=cells_bw,
+      inputs=convolved,
+      dtype=tf.float32,
+      scope="rnn_classification")
+  return outputs
 
+def _add_rnn_layers(convolved, params):
+  outputs = _add_regular_rnn_layers(convolved, params)
+  outputs = tf.reduce_sum(outputs, axis=1)
+  return outputs
 
-def _add_fc_layers(inputs, params):
-    features = tf.reshape(features, [-1,params.p_wind_size])
-    inputs = tf.layers.dense(inputs, 2048)
-    inputs = tf.layers.dense(inputs, params.num_classes)
-    return inputs
+def _add_fc_layers(final_state, params):
+    return tf.layers.dense(final_state, params.num_classes)
 
-def model(inputs, is_training, params):
-      #inputs = _add_conv_layers(inputs, is_training)
-      inputs = _add_regular_rnn_layers(inputs, params)
-      #inputs = _add_fc_layers(inputs,params)
-      return inputs
+def model(inputs, params, mode):
+    convolved = _add_conv_layers(inputs=inputs, mode=mode, params=params)
+    final_state = _add_rnn_layers(convolved=convolved, params=params)
+    logits = _add_fc_layers(final_state=final_state, params=params)
+    return logits

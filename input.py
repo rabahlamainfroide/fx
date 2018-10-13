@@ -40,8 +40,9 @@ def get_input_fn(mode, tfrecord_pattern,  p_wind_size,batch_size, num_epochs):
 
         dataset = tf.data.TFRecordDataset.list_files(tfrecord_pattern +'*')
         dataset = tf.data.TFRecordDataset(dataset)
-        dataset = dataset.prefetch(1000)
-        dataset = dataset.shuffle(1000)
+        dataset = dataset.take(10000)
+        dataset = dataset.prefetch(10000)
+        dataset = dataset.shuffle(10000)
         dataset = dataset.repeat(num_epochs)
         dataset = dataset.map(functools.partial(parse_tfexample_fn, mode=mode, p_wind_size=p_wind_size),num_parallel_calls=12)
         dataset = dataset.batch(batch_size)

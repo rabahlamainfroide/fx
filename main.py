@@ -21,13 +21,6 @@ import glob
 from os.path import normpath
 
 
-class SaverListener(tf.train.CheckpointSaverListener):
-  DST_DIR = 'drive/python_project/forex_project_v7/model_dir/'
-  LOG_DIR = ''
-
-  def after_save(self, session, global_step_value):
-      get_ipython().system_raw(
-                'cp -r {} {} &'.format(self.LOG_DIR, self.DST_DIR))
 
 
 def model_fn(features, labels, mode, params):
@@ -35,7 +28,7 @@ def model_fn(features, labels, mode, params):
   features = tf.reshape(features, [-1, 4, params.p_wind_size])
   features = features[: , 3 , :]
 
-  logits = model(features, mode == tf.estimator.ModeKeys.TRAIN, params)
+  logits = model(inputs=features, mode=mode, params = params)
   predictions = {'classes': tf.argmax(logits, axis=1)}
   if mode == tf.estimator.ModeKeys.PREDICT:
     return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
@@ -65,7 +58,7 @@ def model_fn(features, labels, mode, params):
   train_op = tf.contrib.layers.optimize_loss( loss=cross_entropy,global_step= tf.train.get_global_step(),
                                                 learning_rate=params.learning_rate, optimizer="Adam",
                                                 clip_gradients=params.gradient_clipping_norm,
-                                                summaries=["loss"])
+                                                summaries= ["learning_rate", "loss", "gradients", "gradient_norm"])
   return tf.estimator.EstimatorSpec(mode=mode,
                                     predictions={"logits": logits, "predictions": predictions['classes']},
                                     loss=cross_entropy,
@@ -94,19 +87,10 @@ def create_estimator_and_specs(run_config):
       config=run_config,
       params=model_params)
 
-  # Saver hook
-  if FLAGS.colab:
-    saver = tf.train.Saver()
-    listener = SaverListener()
-    listener.LOG_DIR = FLAGS.model_dir
-    saver_hook = tf.train.CheckpointSaverHook(FLAGS.model_dir+'1', listeners=[listener], saver=saver, save_steps=100)
-    train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
-                                                                    f_wind_size=FLAGS.fwind, num_epochs = 1000000), hooks=[saver_hook])
-  else:
-    train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
-                                                                      f_wind_size=FLAGS.fwind, num_epochs = 1000000))
 
-  eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.EVAL, tfrecord_pattern='tfrecord/eval/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind, f_wind_size=FLAGS.fwind,
+  train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind, num_epochs = 1000000))
+
+  eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.EVAL, tfrecord_pattern='tfrecord/eval/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
                                                                 num_epochs = 1), start_delay_secs = 10000000)
 
   return estimator, train_spec, eval_spec
@@ -208,7 +192,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--learning_rate",
       type=float,
-      default=0.00001,
+      default=0.001,
       help="Learning rate used for training.")
   parser.add_argument(
       "--gradient_clipping_norm",
