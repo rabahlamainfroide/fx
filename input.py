@@ -31,11 +31,9 @@ def parse_tfexample_fn(example_proto, mode, p_wind_size ):
       feature_to_type["label"] = tf.FixedLenFeature([1], dtype=tf.int64)
 
     parsed_features = tf.parse_single_example(example_proto, feature_to_type)
-    #features = parsed_features["p_wind"]
     labels = None
     if mode != tf.estimator.ModeKeys.PREDICT:
       labels = parsed_features["label"]
-      #labels = tf.one_hot(labels, 3)
     return parsed_features, labels
 
 
@@ -43,22 +41,19 @@ def get_input_fn(mode, tfrecord_pattern, batch_size, p_wind_size):
   def input_fn():
           dataset = tf.data.TFRecordDataset.list_files(tfrecord_pattern)
           if mode == tf.estimator.ModeKeys.TRAIN:
-            dataset = dataset.shuffle(buffer_size=3)
+            dataset = dataset.shuffle(buffer_size=120)
           dataset = dataset.repeat()
-          # Preprocesses 10 files concurrently and interleaves records from each file.
           dataset = dataset.interleave(
              tf.data.TFRecordDataset,
               cycle_length=10,
               block_length=1)
           dataset = dataset.map(
               functools.partial(parse_tfexample_fn, mode=mode, p_wind_size=p_wind_size),
-              num_parallel_calls=1)
-          dataset = dataset.prefetch(1)
+              num_parallel_calls=12)
+          dataset = dataset.prefetch(120)
           if mode == tf.estimator.ModeKeys.TRAIN:
-            dataset = dataset.shuffle(buffer_size=1)
-          # Our inputs are variable length, so pad them.
+            dataset = dataset.shuffle(buffer_size=120)
           dataset = dataset.batch(batch_size)
           features, labels = dataset.make_one_shot_iterator().get_next()
-
           return features['p_wind'], labels
   return input_fn

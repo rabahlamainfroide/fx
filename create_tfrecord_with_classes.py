@@ -9,32 +9,9 @@ import os
 import argparse
 import sys
 import glob
+import threading
 
-def _pick_output_shard(output_shards):
-  if (output_shards == 1):
-    return 0
-  else :
-    return np.random.randint(0, output_shards - 1)
 
-def minutes(datetime):
-    return datetime.minute
-
-def convert_csv(csv_patern , output_path, output_shards,p_wind_size, f_wind_size, profit, loss, frame, tolerance):
-    file_handles = glob.glob(csv_patern + '*.csv')
-    writers = []
-    for i in range(output_shards):
-
-      writers.append(
-         tf.python_io.TFRecordWriter("%s-%05i-of-%05i" % (output_path, i,  output_shards)))
-    for i in range(len(file_handles)) :
-        df = pd.read_csv(file_handles[i], parse_dates=[[1,2]], infer_datetime_format= True , delimiter = ',')
-        df =df.loc[df['<DTYYYYMMDD>_<TIME>'].apply(minutes) % frame==0]
-
-        tm = time_series(df,p_wind_size,f_wind_size)
-        tfrecord_generator(df,tm, writers, output_shards,f_wind_size, profit, loss, frame, tolerance)
-        print(file_handles[i], " processed")
-    for w in writers:
-        w.close()
 
 
 class time_series (object):
@@ -46,21 +23,22 @@ class time_series (object):
         self.window_discarded=0
         self.lapswindow=timedelta(minutes=p_wind_size+f_wind_size-1)
 
-    def window(self, frame, tolerance):
 
-        def check_window():
+    def window(self,frame, tolerance):
+
+        def check_window(frame, tolerance):
             for i in range (self.df.shape[0]-self.offset-self.p_wind_size-self.f_wind_size):
                 first = self.df.iloc[self.offset,0]
                 last = self.df.iloc[self.offset +self.p_wind_size+ self.f_wind_size-1,0]
                 lapse=last-first
-                if ((lapse/frame - timedelta(minutes=self.p_wind_size+ self.f_wind_size-1)) > timedelta(minutes=tolerance))  :
+                if (lapse - timedelta(minutes=(self.p_wind_size+ self.f_wind_size-1) * frame) > timedelta(minutes=tolerance))  :
                     self.window_discarded +=1
                     self.offset += 1
-                    if (self.offset +self.f_wind_size+self.p_wind_size>= self.df.shape[0]):
+                    if (self.offset +self.f_wind_size>= self.df.shape[0]):
                         return False
                 else:
                     return True
-        #if not check_window():
+        #if not check_window(frame, tolerance):
         #    return None,None, None, None, None, None
 
 
@@ -86,7 +64,7 @@ class label_generator(object):
 
         lowest_low=np.amin(f_wind[1])
         highst_high=np.amax(f_wind[3])
-        close_price=f_wind[1,f_wind_size-1]
+        close_price=f_wind[1,f_wind_size-2]
         open_price=f_wind[3,0]
         up_swing=highst_high - open_price
         down_swing=open_price - lowest_low
@@ -108,46 +86,76 @@ def print_recurssevely(str):
         print('\r', end='')
         time.sleep(0.2)
 
-def tfrecord_generator(df,tm,writers,output_shards,f_wind_size, profit, loss, frame, tolerance):
-    a = label_generator(profit, loss)
-    max_data=df.shape[0]-tm.p_wind_size-tm.f_wind_size
-    for i in range(max_data):
-        if (i % 1000 == 0) :
-            print_recurssevely(str(int(tm.offset * 100/max_data)) + ' %')
-        vol=None
-        while vol is None:
-            p_wind, f_wind, hour, day_week, day_month,vol  = tm.window(frame, tolerance)
-            if (df.shape[0] - tm.offset - tm.p_wind_size - tm.f_wind_size) <=0 :
-                print("end of file reached.  offset =", tm.offset,"window_discarded = ", tm.window_discarded, )
-                print("buy = ", a.buy_counter, "sell =  ", a.sell_counter, "neutral =  ", a.neutral_counter)
-                return 0
-        label=a.get_label(f_wind, f_wind_size)
-        p_wind = np.fliplr(p_wind)
 
+def chunk_to_tfrecord_classes(df_chunk,total_data, p_wind_size,f_wind_size, profit, loss, output_path, num_classes = 3, frame=5, tolerance=10):
+    writers = []
+    for i in range(num_classes):
+      writers.append(tf.python_io.TFRecordWriter(output_path+'_class_' + str(i)))
+    a = label_generator(profit, loss)
+    chunk =df_chunk.loc[df_chunk['<DTYYYYMMDD>_<TIME>'].apply(minutes) % frame==0]
+    tm = time_series(chunk,p_wind_size,f_wind_size)
+    for i in range(df_chunk.shape[0]-tm.p_wind_size-tm.f_wind_size-10):
+        p_wind, f_wind, hour, day_week, day_month,vol  = tm.window(frame, tolerance)
+        if (vol==None): break
+        label=a.get_label(f_wind, f_wind_size)
         features = {}
         features["p_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=p_wind.flatten()))
+        features["f_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=f_wind.flatten()))
         features["label"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[label]))
         features["day_week"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[day_week]))
         features["day_month"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[day_month]))
         features["hour"]= tf.train.Feature(int64_list=tf.train.Int64List(value=[hour]))
         f = tf.train.Features(feature=features)
         example = tf.train.Example(features=f)
+        writers[label].write(example.SerializeToString())
+        #print_recurssevely(str(int(tm.offset)*15/total_data ) + ' %')
+    for w in writers:
+        w.close()
 
-        writers[_pick_output_shard(output_shards)].write(example.SerializeToString())
 
-    print('offset =', tm.offset,"window_discarded = ", tm.window_discarded )
-    print("buy = ", a.buy_counter, "sell =  ", a.sell_counter, "neutral =  ", a.neutral_counter)
+
+def minutes(datetime):
+    return datetime.minute
+
+def multithreading_csv_to_tfrecord(reader, total_data, chunk_size,  output_path, p_wind_size, f_wind_size, profit, loss):
+  coord = tf.train.Coordinator()
+  threads = []
+  for i in range(3):
+        df_chunk = reader.get_chunk(chunk_size)
+        args = (df_chunk,total_data, p_wind_size,f_wind_size, profit, loss, output_path +'_thread_' + str(i))
+        t = threading.Thread(target=chunk_to_tfrecord_classes, args=args)
+        t.start()
+        threads.append(t)
+
+
+  coord.join(threads)
+  sys.stdout.flush()
+
 
 def main(argv):
 
-    output_name = FLAGS.pair +'_M'+ str(FLAGS.frame) +'_'+ str(FLAGS.pwind) +'_'+ str(FLAGS.fwind) +'_'+ str(FLAGS.loss) +'_'+ str(FLAGS.profit)
+    output_name = FLAGS.pair +'_'+ FLAGS.frame +'_'+ str(FLAGS.pwind) +'_'+ str(FLAGS.fwind) +'_'+ str(FLAGS.loss) +'_'+ str(FLAGS.profit)
     output_path = os.path.join(FLAGS.output_path, output_name)
-    csv_name = FLAGS.pair +'_M1'
+    csv_name = FLAGS.pair +'_'+ FLAGS.frame
     csv_patern = os.path.join(FLAGS.csv_dir, csv_name)
-    print("processing : " , csv_patern,  "            outputing : ", output_path)
+    file_handles = glob.glob(csv_patern + '*.csv')
+    total_data =  len(open(file_handles[0]).readlines())
+    chunk_size = int(total_data/3)
+    reader = pd.read_csv(file_handles[0], parse_dates=[[1,2]], infer_datetime_format= True , delimiter = ',', iterator=True)
+
+    multithreading_csv_to_tfrecord(reader,total_data,chunk_size, output_path,  FLAGS.pwind, FLAGS.fwind, FLAGS.profit, FLAGS.loss)
 
 
-    convert_csv(csv_patern, output_path, FLAGS.output_shards, FLAGS.pwind, FLAGS.fwind, FLAGS.profit, FLAGS.loss, FLAGS.frame, FLAGS.tolerance)
+
+
+
+
+
+
+
+
+
+
 
 
 if __name__ == "__main__":
@@ -159,14 +167,9 @@ if __name__ == "__main__":
        help="Pair")
    parser.add_argument(
        "--frame",
-       type=int,
-       default=5,
+       type=str,
+       default="M1",
        help="Frame")
-   parser.add_argument(
-       "--tolerance",
-       type=int,
-       default=1,
-       help="Tolerance")
    parser.add_argument(
        "--pwind",
        type=int,

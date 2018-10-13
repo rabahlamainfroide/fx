@@ -24,8 +24,7 @@ from os.path import normpath
 
 def model_fn(features, labels, mode, params):
 
-
-
+  tf.summary.image('input', tf.reshape(features, [-1,24,4,1]), 1)
   logits = model(features, mode == tf.estimator.ModeKeys.TRAIN, params)
   if mode == tf.estimator.ModeKeys.PREDICT:
     return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
@@ -41,14 +40,24 @@ def model_fn(features, labels, mode, params):
      optimizer="Adam",
      # some gradient clipping stabilizes training in the beginning.
      clip_gradients=params.gradient_clipping_norm,
-     summaries=["learning_rate", "loss", "gradients", "gradient_norm"])
-  predictions = tf.argmax(logits, axis=1)
+     summaries=["loss"])
+
+  predictions = {
+      'classes': tf.argmax(logits, axis=1)
+  }
+
+
+  accuracy = tf.metrics.accuracy(labels, predictions['classes'])
+  metrics = {'accuracy': accuracy}
+  tf.identity(accuracy[1], name='train_accuracy')
+  tf.summary.scalar('train_accuracy', accuracy[1])
+
   return tf.estimator.EstimatorSpec(
       mode=mode,
-      predictions={"logits": logits, "predictions": predictions},
+      predictions={"logits": logits, "predictions": predictions['classes']},
       loss=cross_entropy,
       train_op=train_op,
-      eval_metric_ops={"accuracy": tf.metrics.accuracy(tf.argmax(labels, axis=1) , predictions)})
+      eval_metric_ops=metrics)
 
 def create_estimator_and_specs(run_config):
 
@@ -80,7 +89,8 @@ def create_estimator_and_specs(run_config):
   eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn(
       mode=tf.estimator.ModeKeys.EVAL,
       tfrecord_pattern="tfrecord/*",
-      batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind))
+      batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind),
+      throttle_secs=600)
 
   return estimator, train_spec, eval_spec
 
@@ -88,12 +98,12 @@ def create_estimator_and_specs(run_config):
 
 def main(unused_argv):
   def tfrecord_exist():
-    output_name = FLAGS.pair +'_'+ FLAGS.frame +'_'+ str(FLAGS.pwind) +'_'+ str(FLAGS.fwind) +'_'+ str(FLAGS.loss) +'_'+ str(FLAGS.profit)
+    output_name = FLAGS.pair +'_M'+ str(FLAGS.frame) +'_'+ str(FLAGS.pwind) +'_'+ str(FLAGS.fwind) +'_'+ str(FLAGS.loss) +'_'+ str(FLAGS.profit)
     output_path = os.path.join(FLAGS.output_path, output_name)
     istfrecord_exist = glob.glob(output_path + '*')
     return output_path, istfrecord_exist
 
-  csv_name = FLAGS.pair +'_'+ FLAGS.frame
+  csv_name = FLAGS.pair +'_M'+ str(FLAGS.frame)
   csv_patern = os.path.join(FLAGS.csv_dir, csv_name)
   output_path, istfrecord_exist= tfrecord_exist()
 
@@ -134,8 +144,8 @@ if __name__ == "__main__":
       help="Pair")
   parser.add_argument(
       "--frame",
-      type=str,
-      default="M1",
+      type=int,
+      default=5,
       help="Frame")
   parser.add_argument(
       "--pwind",
