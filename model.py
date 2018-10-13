@@ -13,56 +13,37 @@ import argparse
 import sys
 import functools
 
+def _add_conv_layers(inputs, is_training):
+    inputs = tf.layers.conv2d(inputs, filters= 256 , kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv1')
+    inputs = tf.layers.batch_normalization(inputs,training=is_training)
+    inputs = tf.layers.conv2d(inputs, filters= 512, kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv2')
+    inputs = tf.layers.batch_normalization(inputs,training=is_training)
+    inputs = tf.layers.average_pooling2d( inputs=inputs, pool_size=2, strides=2, padding='same')
+    inputs = tf.layers.conv2d(inputs, filters= 1024 , kernel_size=[4, 4], strides=1, padding="same", activation=tf.tanh, name= 'conv3')
+    inputs = tf.layers.conv2d(inputs, filters= 1024 , kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv4')
+    inputs = tf.layers.conv2d(inputs, filters= 1024 , kernel_size=[4, 4], strides=1, padding="same",activation=tf.tanh, name= 'conv5')
+    inputs = tf.layers.average_pooling2d(inputs=inputs, pool_size=2, strides=2, padding='same')
+    inputs = tf.layers.batch_normalization(inputs,training=is_training)
+    return inputs
 
-
-def _add_conv_layers(inputs, is_training,params):
-    for i in range(len(params.num_conv)):
-      convolved_input = inputs
-      if params.batch_norm:
-        convolved_input = tf.layers.batch_normalization(convolved_input,training=is_training)
-
-      convolved = tf.layers.conv1d(
-          convolved_input,
-          filters=params.num_conv[i],
-          kernel_size=params.conv_len[i],
-          activation=None,
-          strides=1,
-          padding="same",
-          name="conv1d_%d" % i)
-      convolved = tf.layers.average_pooling1d( inputs=convolved, pool_size=2, strides=1, padding='VALID')
-    return convolved
-
-def _add_regular_rnn_layers(inputs, params):
-    """Adds RNN layers."""
-    if params.cell_type == "lstm":
-      cell = tf.nn.rnn_cell.BasicLSTMCell
-    elif params.cell_type == "block_lstm":
-      cell = tf.contrib.rnn.LSTMBlockCell
-    cells_fw = [cell(params.num_nodes) for _ in range(params.num_layers)]
-    #if params.dropout > 0.0:
-    #  cells_fw = [tf.contrib.rnn.DropoutWrapper(cell) for cell in cells_fw]
+def _add_regular_rnn_layers(inputs, params, num_nodes=4000,  num_layers=1 ):
+    inputs = tf.reshape(inputs, [-1,  params.p_wind_size,1])
+    cell = tf.nn.rnn_cell.BasicLSTMCell
+    cells_fw = [cell(num_nodes) for _ in range(num_layers)]
     stacked_rnn_cell = tf.nn.rnn_cell.MultiRNNCell(cells_fw)
-    _, state = tf.nn.dynamic_rnn(stacked_rnn_cell, inputs,scope="rnn_classification", dtype=tf.float32)
-    return state[params.num_layers-1].h
+    outputs, _ = tf.nn.dynamic_rnn(stacked_rnn_cell, inputs, initial_state=None, scope="rnn_classification", dtype=tf.float32)
+    output = tf.layers.dense(outputs[:, -1, :],  params.num_classes)
+    return output
 
 
-def _add_rnn_layers(inputs, is_training, params):
-    """Adds recurrent neural network layers depending on the cell type."""
-    if params.cell_type != "cudnn_lstm":
-      outputs = _add_regular_rnn_layers(inputs, params)
-    else:
-      outputs = _add_cudnn_rnn_layers(inputs, is_training, params)
-    return outputs
 def _add_fc_layers(inputs, params):
-    inputs = tf.reshape(inputs, [-1, params.num_nodes ])
-    inputs = tf.layers.dense(inputs, 1024, activation=tf.nn.relu)
+    features = tf.reshape(features, [-1,params.p_wind_size])
+    inputs = tf.layers.dense(inputs, 2048)
     inputs = tf.layers.dense(inputs, params.num_classes)
     return inputs
 
-
-
 def model(inputs, is_training, params):
-      #inputs = _add_conv_layers(inputs, is_training, params)
-      inputs = _add_rnn_layers(inputs, is_training, params)
-      inputs = _add_fc_layers(inputs,params )
+      #inputs = _add_conv_layers(inputs, is_training)
+      inputs = _add_regular_rnn_layers(inputs, params)
+      #inputs = _add_fc_layers(inputs,params)
       return inputs

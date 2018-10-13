@@ -17,21 +17,19 @@ import functools
 
 from model import model
 import input
-from create_tfrecord import convert_csv
 import glob
 from os.path import normpath
 
 
 def model_fn(features, labels, mode, params):
-
-  features = tf.reshape(features, [-1, 4, params.p_wind_size,1])
+  features = features['p_wind']
+  features = tf.reshape(features, [-1, 4, params.p_wind_size])
   features = features[: , 3 , :]
+
   logits = model(features, mode == tf.estimator.ModeKeys.TRAIN, params)
   predictions = {'classes': tf.argmax(logits, axis=1)}
-
   if mode == tf.estimator.ModeKeys.PREDICT:
     return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
-
   labels= tf.reshape(labels,[-1])
   accuracy = tf.metrics.accuracy(labels, predictions['classes'])
   metrics = {'accuracy': accuracy}
@@ -40,10 +38,6 @@ def model_fn(features, labels, mode, params):
   tf.identity(recall[1], name='recall')
   tf.summary.scalar('recall', recall[1])
 
-  conf_matrix= tf.confusion_matrix(labels, predictions['classes'],3)
-  conf_matrix= tf.reshape(conf_matrix, [-1,3,3,1])
-  tf.identity(conf_matrix, name='confusion_matrix')
-  tf.summary.image('confusion_matrix', tf.cast(conf_matrix,dtype=tf.float32))
 
   precision= tf.metrics.precision(labels, predictions['classes'])
   tf.identity(precision[1], name='precision')
@@ -57,24 +51,14 @@ def model_fn(features, labels, mode, params):
   conf_matrix= tf.reshape(conf_matrix, [-1,3,3,1])
   tf.identity(conf_matrix, name='confusion_matrix')
   tf.summary.image('confusion_matrix', tf.cast(conf_matrix,dtype=tf.float32))
-#############################################################################
-  sum = tf.reshape(tf.reduce_sum(tf.reshape(conf_matrix,[3,3]), axis= 1),[-1])
-  tf.summary.scalar('class_0', sum[0])
-  tf.summary.scalar('class_1', sum[1])
-  tf.summary.scalar('class_2', sum[2])
-###############################################################################
-  cross_entropy = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
 
-  if mode == tf.estimator.ModeKeys.TRAIN:
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-      with tf.control_dependencies(update_ops):
-        train_op = tf.contrib.layers.optimize_loss( loss=cross_entropy,global_step= tf.train.get_or_create_global_step(),
+  #my_optimizer = tf.train.MomentumOptimizer(learning_rate, momentum, use_locking=False, name='Momentum', use_nesterov=False)
+
+  cross_entropy = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
+  train_op = tf.contrib.layers.optimize_loss( loss=cross_entropy,global_step= tf.train.get_global_step(),
                                                 learning_rate=params.learning_rate, optimizer="Adam",
                                                 clip_gradients=params.gradient_clipping_norm,
                                                 summaries=["loss"])
-  else:
-    train_op = None
-
   return tf.estimator.EstimatorSpec(mode=mode,
                                     predictions={"logits": logits, "predictions": predictions['classes']},
                                     loss=cross_entropy,
@@ -103,42 +87,32 @@ def create_estimator_and_specs(run_config):
       config=run_config,
       params=model_params)
 
-  train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn( mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern="tfrecord/*",
-                                                                    batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
-                                                                    f_wind_size=FLAGS.fwind, num_epochs = 10000))
+  train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
+                                                                    f_wind_size=FLAGS.fwind, num_epochs = 1000000))
 
-  eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn( mode=tf.estimator.ModeKeys.EVAL, tfrecord_pattern="tfrecord/*",
-                                                                batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind, f_wind_size=FLAGS.fwind,
-                                                                num_epochs = 10000), start_delay_secs=100000)
+  eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.EVAL, tfrecord_pattern='tfrecord/eval/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind, f_wind_size=FLAGS.fwind,
+                                                                num_epochs = 1), start_delay_secs = 10000000)
 
   return estimator, train_spec, eval_spec
 
 
-
 def main(unused_argv):
-  def tfrecord_exist():
+
     output_name = FLAGS.pair +'_M'+ str(FLAGS.frame) +'_'+ str(FLAGS.pwind) +'_'+ str(FLAGS.fwind) +'_'+ str(FLAGS.loss) +'_'+ str(FLAGS.profit)
-    output_path = os.path.join(FLAGS.output_path, output_name)
-    istfrecord_exist = glob.glob(output_path + '*')
-    return output_path, istfrecord_exist
+    train_path = os.path.join('tfrecord/train', output_name)
+    eval_path = os.path.join('tfrecord/eval', output_name)
 
-  csv_name = FLAGS.pair +'_M'+ str(FLAGS.frame)
-  csv_patern = os.path.join(FLAGS.csv_dir, csv_name)
-  output_path, istfrecord_exist= tfrecord_exist()
+    if (glob.glob(train_path + '*') and glob.glob(eval_path + '*')) :
+        print('print running estimator on tfrecord with patern :', train_path, 'and', eval_path )
+        estimator, train_spec, eval_spec = create_estimator_and_specs(
+            run_config=tf.estimator.RunConfig(
+                model_dir=FLAGS.model_dir,
+                save_checkpoints_secs=300,
+                save_summary_steps=100))
 
-
-
-  if (istfrecord_exist):
-    print('print running estimator on tfrecord with patern :', output_path, '*' )
-    estimator, train_spec, eval_spec = create_estimator_and_specs(
-        run_config=tf.estimator.RunConfig(
-            model_dir=FLAGS.model_dir,
-            save_checkpoints_secs=300,
-            save_summary_steps=100))
-
-    tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
-  else :
-    print(' no tfrecord  file fit the pattern :   ', output_path, '*')
+        tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+    else :
+        print(' no tfrecord file fitting this pattern : ', train_path, 'or', eval_path  )
 
 
 if __name__ == "__main__":
@@ -193,7 +167,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--num_nodes",
       type=int,
-      default=526,
+      default=1000,
       help="Number of node per recurrent network layer.")
   parser.add_argument(
       "--num_conv",
@@ -218,12 +192,12 @@ if __name__ == "__main__":
   parser.add_argument(
       "--learning_rate",
       type=float,
-      default=0.1,
+      default=0.00001,
       help="Learning rate used for training.")
   parser.add_argument(
       "--gradient_clipping_norm",
       type=float,
-      default=9.0,
+      default=None,
       help="Gradient clipping norm used during training.")
   parser.add_argument(
       "--dropout",
@@ -238,7 +212,7 @@ if __name__ == "__main__":
   parser.add_argument(
       "--batch_size",
       type=int,
-      default=1000,
+      default=300,
       help="Batch size to use for training/evaluation.")
   parser.add_argument(
       "--model_dir",
@@ -255,11 +229,7 @@ if __name__ == "__main__":
       type=int,
       default=10,
       help="Number of shards for the output.")
-  parser.add_argument(
-      "--output_path",
-      type=str,
-      default= "tfrecord",
-      help="Directory where to store the output TFRecord files.")
+
   parser.add_argument(
       "--csv_dir",
       type=str,
