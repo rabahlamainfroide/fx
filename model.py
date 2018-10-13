@@ -26,7 +26,7 @@ def _add_conv_layers(inputs, is_training):
     inputs = tf.layers.batch_normalization(inputs,training=is_training)
     return inputs
 
-def _add_regular_rnn_layers(inputs, params, num_nodes=4000,  num_layers=1 ):
+def _add_regular_rnn_layers(inputs, params, num_nodes=2000,  num_layers=5 ):
     inputs = tf.reshape(inputs, [-1,  params.p_wind_size,1])
     cell = tf.nn.rnn_cell.BasicLSTMCell
     cells_fw = [cell(num_nodes) for _ in range(num_layers)]

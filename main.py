@@ -21,6 +21,15 @@ import glob
 from os.path import normpath
 
 
+class SaverListener(tf.train.CheckpointSaverListener):
+  DST_DIR = 'drive/python_project/forex_project_v7/model_dir/'
+  LOG_DIR = ''
+
+  def after_save(self, session, global_step_value):
+      get_ipython().system_raw(
+                'cp -r {} {} &'.format(self.LOG_DIR, self.DST_DIR))
+
+
 def model_fn(features, labels, mode, params):
   features = features['p_wind']
   features = tf.reshape(features, [-1, 4, params.p_wind_size])
@@ -51,8 +60,6 @@ def model_fn(features, labels, mode, params):
   conf_matrix= tf.reshape(conf_matrix, [-1,3,3,1])
   tf.identity(conf_matrix, name='confusion_matrix')
   tf.summary.image('confusion_matrix', tf.cast(conf_matrix,dtype=tf.float32))
-
-  #my_optimizer = tf.train.MomentumOptimizer(learning_rate, momentum, use_locking=False, name='Momentum', use_nesterov=False)
 
   cross_entropy = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
   train_op = tf.contrib.layers.optimize_loss( loss=cross_entropy,global_step= tf.train.get_global_step(),
@@ -87,8 +94,17 @@ def create_estimator_and_specs(run_config):
       config=run_config,
       params=model_params)
 
-  train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
-                                                                    f_wind_size=FLAGS.fwind, num_epochs = 1000000))
+  # Saver hook
+  if FLAGS.colab:
+    saver = tf.train.Saver()
+    listener = SaverListener()
+    listener.LOG_DIR = FLAGS.model_dir
+    saver_hook = tf.train.CheckpointSaverHook(FLAGS.model_dir+'1', listeners=[listener], saver=saver, save_steps=100)
+    train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
+                                                                    f_wind_size=FLAGS.fwind, num_epochs = 1000000), hooks=[saver_hook])
+  else:
+    train_spec = tf.estimator.TrainSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.TRAIN, tfrecord_pattern='tfrecord/train/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind,
+                                                                      f_wind_size=FLAGS.fwind, num_epochs = 1000000))
 
   eval_spec = tf.estimator.EvalSpec(input_fn=input.get_input_fn(mode=tf.estimator.ModeKeys.EVAL, tfrecord_pattern='tfrecord/eval/', batch_size=FLAGS.batch_size, p_wind_size=FLAGS.pwind, f_wind_size=FLAGS.fwind,
                                                                 num_epochs = 1), start_delay_secs = 10000000)
@@ -235,6 +251,12 @@ if __name__ == "__main__":
       type=str,
       default="csv_dir",
       help="Directory where the ndjson files are stored.")
+
+  parser.add_argument(
+      "--colab",
+      type=bool,
+      default=False,
+      help="If running on colab.")
 
   FLAGS, unparsed = parser.parse_known_args()
   tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)

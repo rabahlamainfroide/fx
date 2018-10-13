@@ -17,11 +17,9 @@ import sys
 import functools
 from sklearn import preprocessing
 
-def parse_tfexample_fn(example_proto, mode, p_wind_size, f_wind_size ):
-    """Parse a single record which is expected to be a tensorflow.Example."""
+def parse_tfexample_fn(example_proto, mode, p_wind_size):
     feature_to_type = {
         'p_wind' : tf.FixedLenFeature([p_wind_size * 4], dtype=tf.float32),
-        'f_wind' : tf.FixedLenFeature([f_wind_size * 4], dtype=tf.float32),
         'day_week' : tf.FixedLenFeature([1], dtype=tf.int64),
         'day_month' : tf.FixedLenFeature([1], dtype=tf.int64),
         'hour' :tf.FixedLenFeature([1], dtype=tf.int64)
@@ -37,33 +35,35 @@ def parse_tfexample_fn(example_proto, mode, p_wind_size, f_wind_size ):
     return parsed_features, labels
 
 
-def get_input_fn(mode, tfrecord_pattern,  p_wind_size,f_wind_size,batch_size, num_epochs):
+def get_input_fn(mode, tfrecord_pattern,  p_wind_size,batch_size, num_epochs):
   def input_fn():
 
         dataset = tf.data.TFRecordDataset.list_files(tfrecord_pattern +'*')
         dataset = tf.data.TFRecordDataset(dataset)
-        dataset = dataset.take(10000)
         dataset = dataset.prefetch(1000)
         dataset = dataset.shuffle(1000)
         dataset = dataset.repeat(num_epochs)
-        dataset = dataset.map(functools.partial(parse_tfexample_fn, mode=mode, p_wind_size=p_wind_size, f_wind_size=f_wind_size),num_parallel_calls=12)
+        dataset = dataset.map(functools.partial(parse_tfexample_fn, mode=mode, p_wind_size=p_wind_size),num_parallel_calls=12)
         dataset = dataset.batch(batch_size)
         features, labels = dataset.make_one_shot_iterator().get_next()
         return features, labels
 
   return input_fn
 
-'''
-input_fn= get_input_fn(tf.estimator.ModeKeys.TRAIN, "tfrecord/eval/EURUSD_M5_36_48_15_25_*", 36, 48, 2,1)
-features, labels= input_fn()
-
-features = features['p_wind']
-features = tf.reshape(features, [-1, 4, 36])
-features = features[: , 3 ,: ]
-features = tf.reshape(features, [-1,  36,1])
-
-
-
-with tf.Session() as sess :
-        print(sess.run(tf.shape(features)))
-'''
+#
+# input_fn= get_input_fn(tf.estimator.ModeKeys.TRAIN, "tfrecord/train/EURUSD_M5_36_48_15_25_0", 36, 1,1)
+# features, labels= input_fn()
+#
+# features = features['p_wind']
+#
+# features = tf.reshape(features, [-1, 4, 36])
+#
+# features = features[: , 3 ,: ]
+# features = tf.reshape(features, [-1,  36,1])
+#
+#
+#
+# with tf.Session() as sess :
+#         print(sess.run(features))
+# import os
+# print(os.getcwd())

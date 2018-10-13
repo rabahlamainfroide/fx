@@ -22,7 +22,6 @@ def _pick_output_shard(output_shards):
 
 def dict_to_train_feature(features):
     features["p_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=features["p_wind"].flatten()))
-    features["f_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=features["f_wind"].flatten()))
     features["day_week"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[features["day_week"]]))
     features["day_month"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[features["day_month"]]))
     features["hour"]= tf.train.Feature(int64_list=tf.train.Int64List(value=[features["hour"]]))
@@ -38,7 +37,7 @@ def minutes(datetime):
     return datetime.minute
 
 class time_series (object):
-    def __init__(self, df,p_wind_size,f_wind_size, profit, loss):
+    def __init__(self, df, p_wind_size,f_wind_size, profit, loss):
         self.df = df
         self.p_wind_size=p_wind_size
         self.f_wind_size=f_wind_size
@@ -47,82 +46,96 @@ class time_series (object):
         self.lapswindow=timedelta(minutes=p_wind_size+f_wind_size-1)
         self.profit = profit
         self.loss = loss
+        self.max_data = df.shape[0]-p_wind_size-f_wind_size
 
-    def window(self, frame, tolerance):
 
-        def check_window():
-            for i in range (self.df.shape[0]-self.offset-self.p_wind_size-self.f_wind_size):
-                first = self.df.iloc[self.offset,0]
-                last = self.df.iloc[self.offset +self.p_wind_size+ self.f_wind_size-1,0]
-                lapse=last-first
-                if ((lapse/frame - timedelta(minutes=self.p_wind_size+ self.f_wind_size-1)) > timedelta(minutes=tolerance))  :
-                    self.window_discarded +=1
-                    self.offset += 1
-                    if (self.offset +self.f_wind_size+self.p_wind_size>= self.df.shape[0]):
-                        return False
-                else:
-                    return True
-        if not check_window():
-            return None,None, None, None, None, None
 
+
+    def window(self,tolerance, frame):
+        if (self.max_data - self.offset==0):
+            return False
         a = label_generator(self.profit, self.loss)
-
         p_wind= np.array(self.df.iloc[self.offset:self.offset + self.p_wind_size,2:6])
         f_wind=np.array(self.df.iloc[self.offset + self.p_wind_size-1:self.offset +self.p_wind_size+ self.f_wind_size-1,2:6])
-        p_wind = ((p_wind - p_wind[0,3]) * 10000).astype(int)
-        f_wind = ((f_wind - f_wind[0,3]) * 10000).astype(int)
+        p_wind[1:, 0:4] -= p_wind[0:-1, 0:4]
+        p_wind = (p_wind * 10000).astype(int)
+        p_wind[0, 0:4] =0
+        f_wind = (f_wind * 10000).astype(int)
         time_date = self.df.iloc[self.offset + self.p_wind_size,0]
         vol = self.df.iloc[self.offset + self.p_wind_size,6]
-        self.offset=self.offset+1
-        if (self.offset +self.f_wind_size>= self.df.shape[0]):
-            return False
         features =  {}
-
         features["p_wind"] = np.rot90(p_wind)
-        features["f_wind"] = np.rot90(f_wind)
         features["day_week"] = time_date.weekday()
         features["day_month"] = time_date.day
         features["hour"]= time_date.hour
-        features["label"] = a.get_label(features["f_wind"], self.f_wind_size)
+        features["label"] = a.get_label(f_wind, self.f_wind_size)
+        self.offset=self.offset+1
         return features
 
+    def get_label(self):
+        f_wind=np.array(self.df.iloc[self.offset + self.p_wind_size-1:self.offset +self.p_wind_size+ self.f_wind_size-1,2:6])
+        f_wind = (f_wind * 10000).astype(int)
+        if (self.max_data - self.offset==0):
+            return False
+        a = label_generator(self.profit, self.loss)
+        label = a.get_label(f_wind, self.f_wind_size)
+        self.offset += 1
+        return label
 
-    def reset_offset(self):
-        self.offset = 0
+
+    def get_num_of_classes(self):
+      i = 0
+      classes = [0,0,0]
+      while True:
+          label = self.get_label()
+          if (self.max_data - self.offset == 0) :
+              self.offset = 0
+              return np.array(classes)
+          if (i % 10000 == 0) :
+              print(' counting min_lasses : ' , int(self.offset * 100/self.max_data), ' %')
+          if label == 0:
+              classes[label] += 1
+          elif label == 1:
+              classes[label] += 1
+          elif label == 2:
+              classes[label] += 1
+          i+=1
+
+
+
+
+
 
 class label_generator(object):
     def __init__(self,profit, loss):
-        self.sell_counter = 0
+        #self.sell_counter = 0
         self.loss= loss
         self.profit=profit
-        self.buy_counter = 0
-        self.neutral_counter = 0
+        #self.buy_counter = 0
+        #self.neutral_counter = 0
 
     def get_label(self,f_wind, f_wind_size):
-
-        lowest_low=np.amin(f_wind[1])
-        highst_high=np.amax(f_wind[3])
-        close_price=f_wind[1,f_wind_size-1]
-        open_price=f_wind[3,0]
+        lowest_low=np.amin(f_wind[:, 2])
+        highst_high=np.amax(f_wind[:, 1])
+        close_price=f_wind[f_wind_size-1,3]
+        open_price=f_wind[0,0]
         up_swing=highst_high - open_price
         down_swing=open_price - lowest_low
         if (up_swing >= self.profit) and (down_swing <=self.loss) :
             label = 1
-            self.buy_counter+=1
+            #self.buy_counter+=1
         else :
             if (up_swing <= self.loss)  and (down_swing >=self.profit):
                 label = 2
-                self.sell_counter+=1
+                #self.sell_counter+=1
             else :
                 label=0
-                self.neutral_counter+=1
+                #self.neutral_counter+=1
         return label
-
 
 def feature_dict_to_tfrecord(feature_dict, writers, writers_index):
     features = {}
     features["p_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=feature_dict["p_wind"].flatten()))
-    features["f_wind"] = tf.train.Feature(float_list=tf.train.FloatList(value=feature_dict["f_wind"].flatten()))
     features["day_week"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[feature_dict["day_week"]]))
     features["day_month"] = tf.train.Feature(int64_list=tf.train.Int64List(value=[feature_dict["day_month"]]))
     features["hour"]= tf.train.Feature(int64_list=tf.train.Int64List(value=[feature_dict["hour"]]))
@@ -141,9 +154,10 @@ def csv_to_data_frame(csv_path, frame):
 def from_time_series_to_tfrecord(tm, writers, writers_index, thread_index):
     lost = np.array([0, 0, 0])
     stored = np.array([0, 0, 0])
+    num_classes = tm.get_num_of_classes()
+
+    min_of_classes = np.amin(num_classes)
     while True :
-        min_of_classes = np.amin(np.array(get_min_of_classes(tm, thread_index)))
-        tm.reset_offset()
         list_buffers, last, lost_iter, stored_iter = three_class_buffers(tm, min_of_classes, thread_index)
         three_class_buffers_to_tfrecord(list_buffers, writers, writers_index, last)
         lost += np.array(lost_iter)
@@ -154,23 +168,7 @@ def from_time_series_to_tfrecord(tm, writers, writers_index, thread_index):
             print('stored |', stored[0], '|', stored[1], '|', stored[2])
             break
 
-def get_min_of_classes(tm, thread_index):
-    i = 0
-    classes = [0, 0, 0]
-    max_data=tm.df.shape[0]-tm.p_wind_size-tm.f_wind_size
-    while True:
-        features= tm.window(FLAGS.frame, FLAGS.tolerance)
-        if (tm.df.shape[0] - tm.offset - tm.p_wind_size - tm.f_wind_size) <=0 :
-            return classes
-        if (i % 100000 == 0) :
-            print('thread', thread_index, ' counting min_lasses : ' , int(tm.offset * 100/max_data), ' %')
-        if features['label'] == 0:
-            classes[features['label']] += 1
-        elif features['label'] == 1:
-            classes[features['label']] += 1
-        elif features['label'] == 2:
-            classes[features['label']] += 1
-        i+=1
+
 
 
 def three_class_buffers(tm, thresh, thread_index):
@@ -179,14 +177,14 @@ def three_class_buffers(tm, thresh, thread_index):
     buffer_0 = []
     buffer_1 = []
     buffer_2 = []
-    max_data=tm.df.shape[0]-tm.p_wind_size-tm.f_wind_size
+
     i=0
     while True:
         features= tm.window(FLAGS.frame, FLAGS.tolerance)
-        if (tm.df.shape[0] - tm.offset - tm.p_wind_size - tm.f_wind_size) <=0 :
+        if (tm.max_data - tm.offset) ==0 :
             return [buffer_0, buffer_1, buffer_2], True, lost, stored
-        if (i % 100000 == 0) :
-            print('thread', thread_index, 'writing to tfrecord: ' , int(tm.offset * 100/max_data), ' %')
+        if (i % 10000 == 0) :
+            print('thread', thread_index, 'writing to tfrecord: ' , int(tm.offset * 100/tm.max_data), ' %')
         if features['label'] == 0 and len(buffer_0) < thresh:
             stored[features['label']] += 1
             buffer_0.append(features)
@@ -244,6 +242,8 @@ def main(argv):
         df_list[0], df_list[1], df_list[2] = np.split(df_train, [int(0.33 * len(df_train)), int(0.66 * len(df_train))])
         df_list[3] = df_eval
         ts_list = []
+
+
         for i in range(4):
             ts_list.append(time_series(df_list[i], FLAGS.pwind, FLAGS.fwind, FLAGS.profit, FLAGS.loss))
         threads = []
@@ -251,10 +251,11 @@ def main(argv):
             t = threading.Thread(target=from_time_series_to_tfrecord, args=(ts_list[i], writers, i, i ))
             threads.append(t)
             t.start()
+        
 
 
 
-    create_dataset(0.8)
+    create_dataset(0.9)
 
 
 
